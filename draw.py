@@ -195,6 +195,29 @@ class Plane(Shape):
         plane = Plane(normal)
         return plane
 
+class Thorus(Shape):
+    
+    def __init__(self, r_thorus, r_pipe, center):
+        self.radius = r_thorus
+        self.pipe_radius = r_pipe
+        self.center = center
+        
+    def draw(self, canvas):
+        gx, gy, gz = canvas.grid()
+        c = numpy.zeros((4,4,4))
+        c[1,0,0] = self.normal[0]
+        c[0,1,0] = self.normal[1]
+        c[0,0,1] = self.normal[2]
+        points = poly.polyval3d(gx, gy, gz, c)
+        plane = numpy.around(points) == 0
+        canvas.setgrid(plane)
+        
+    def fromArgs(args):
+        radius = args['radius']
+        pipe_radius = args['pipe_radius']
+        center = args['center']
+        return Thorus(radius, pipe_radius, center)
+
 def main():
     parser = argparse.ArgumentParser(description="generate a discrete circle map")
     parser.add_argument('-b', '--blank', type=str, default=' ', dest='blank', required=False, help='Char to use for blank cell')
@@ -229,6 +252,16 @@ def main():
     parser_p.add_argument('-n', '--normal', type=int, nargs=3, default=[1,0,0], dest='normal', required=False,
                           help='Normal to the plane, default %(default)s')
     parser_p.set_defaults(func=Plane.fromArgs)
+    
+        # create parser for the thorus command
+    parser_t = subp.add_parser('thorus', help="thorus --help")
+    parser_t.add_argument('-r', '--radius', type=int, default=5, dest='radius', required=False,
+                          help='Radius of the thorus, from center to the middle of the pipe, default %(default)s')
+    parser_t.add_argument('-p', '--pipe', type=int, default=2, dest='pipe_radius', required=False,
+                          help='Radius of the pipe, default %(default)s')
+    parser_t.add_argument('-c', '--center', type=int, nargs=3, default=[0,0,0], dest='center', required=False,
+                          help='Center of the thorus, default %(default)s')
+    parser_t.set_defaults(func=Thorus.fromArgs)
 
     # parse the arguments
     args = vars(parser.parse_args())
