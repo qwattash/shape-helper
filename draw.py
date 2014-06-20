@@ -1,9 +1,11 @@
 #!/bin/python
 
 import argparse
-import math
+import time
 import numpy
 from numpy.polynomial import polynomial as poly
+from scipy.signal import fftconvolve, convolve
+from scipy.ndimage.morphology import binary_dilation
 
 class Canvas(object):
     
@@ -39,7 +41,8 @@ class Canvas(object):
         the window is an array of intervals, one for each dimension in use R(3, 2)
         """
         self.setWindow(interval)
-        
+
+    # ------------------------------------- Dataset access
     def setWindow(self, interval):
         self.window = interval
         # add 1 to interval ends since range() is not inclusive
@@ -64,20 +67,113 @@ class Canvas(object):
         if (point > self.window[:,0]).all() and (point < self.window[:,1]).all():
             return self.data.item(*(point - self.window[:,0]))
   
-    def setgrid(self, mask, value=1):
+    def setgrid(self, mask, value=1, downsample=False):
         #set mask
+        if (downsample):
+            #the mask given is too large, it must be
+            # downsampled to fit the output data size
+            src_shape = mask.shape
+            dst_shape = self.data.shape
+            ci = numpy.ceil(src_shape[0]/dst_shape[0])
+            cj = numpy.ceil(src_shape[1]/dst_shape[1])
+            ck = numpy.ceil(src_shape[2]/dst_shape[2])
+            """
+            premessa:
+            le parti commentate vengono dall'implementazione usando un mean 
+            filter, le parti attuali vengono da un'altra 
+            implementazione più semplice che
+            fa uso di una cosa che si chiama morfologia
+            come al solito è un parolone per dire una cosa semplice D:
+            l'idea di fondo è questa:
+            io ho la matrice input con alcuni punti a 1 e il resto a zero
+            i punti a 1 sono i punti sul luogo geometrico e voglio "propagarli"
+            nell'output.
+            qeul che faccio è prendere i punti della matrice input ogni 
+            ci sulla x, cj sulla y e ck sulla z, questo mi permette di
+            estrarre il numero di punti esattamente uguale a quelli
+            necessari per riempire la matrice di output
+            esempio in meno-d:
+            se ho due matrici una 4x4 e una 2x2 e voglio passare dalla 
+            4x4 alla 2x2 avrò tipo:
+            [1< 2 3< 4,         [? ?,
+             5 6 7 8,          ? ?] 
+             9< 1 2< 3,
+             4 5 6 7]
+            ora qui ci e cj sono 2 perchè il fattore di scala è 2 ok
+            quindi prendo i punti ogni 2 cioè got it!
+            in 3D è uguale solo meno intuitivo questo l'ho capito
+            ottimo, ora il problema è questo
+            [0 1 0 1
+             1 1(1) 1(1) 1(1),          ? ?] 
+             0 1(1) 0<lui(1) 1(1), se c'è almeno un elemento della matrice
+             1 1(1) 1(1) 1(1)]  a 1 su cui ho sovrapposto un elemento a 1 di struct allora mette il punto centrale a 1 ok in pratica in questo modo prendo i
+            pezzi mancanti cioè mi guardo intorno, è simile ad un mean filter
+            però siccome del numero non me ne frega faccio questa cosa binaria
+            che è più veloce scusa brb un sec kk 
+            eccomi, si comunque intuitivamente ci sono.
+            in pratica mi viene 0 ma il luogo geometrico è ben presente in 
+            quella zona capito.. o uno cambia il 
+            "fattore di ridimensionamento"..
+            l'operatore fa questa cosa:
+            in pratica prende la matrice di input e per ogni punto ci
+            sovrappone l'elemento "struct" di cui sotto che in questo caso è
+            tutto a 1 ed è di dimensione variabile, qui assumi che sia 3x3 e
+            il centro venga sovrapposto ad ogni punto
+            cioè
+            struct =
+            [1 1 1,
+             1 1< 1, lui è il centro e viene "sovrapposto"
+             1 1 1]
+            """
+            #kernel = numpy.ones((ci,cj,ck)) * 1/(ci*cj*ck)
+            struct_dimension = numpy.array([ci,cj,ck])
+            # make the structuring element with odd dimension
+            struct_dimension = numpy.add(struct_dimension, (struct_dimension + 1) % 2)
+            struct = numpy.ones(struct_dimension, dtype=bool)
+            #mask[:] *= (ci*cj*ck)
+            #kernel = numpy.array([[[1,1,1],[1,1,1],[1,1,1]], [[1,1,1],[1,1,1],[1,1,1]], [[1,1,1],[1,1,1],[1,1,1]]]) * 1/27
+            # N-d convolution with mean filter
+            #mean = fftconvolve(mask, kernel)
+            #print(numpy.count_nonzero(mean.flatten()))
+            #print(mask.size)
+            (si, sj, sk) = numpy.array(numpy.meshgrid(numpy.arange(0, mask.shape[0], ci, dtype=numpy.int16),
+                                                      numpy.arange(0, mask.shape[1], cj, dtype=numpy.int16),
+                                                      numpy.arange(0, mask.shape[2], ck, dtype=numpy.int16), 
+                                                      sparse=True))
+            origin = numpy.floor(struct_dimension / 2).astype(int)
+            # the mask for dilation saves time by reducing the number of points
+            # evaluated from (k*n)^3 to n^3 with n = dim(self.data)
+            dilation_mask = numpy.zeros(src_shape, dtype=bool)
+            dilation_mask[si,sj,sk] = True
+            mean = binary_dilation(mask, struct, origin=origin, border_value=0, mask=dilation_mask)
+            self.data = mean[si,sj,sk] != 0
+            #self.show(dbg=True)
+            return
         self.data[mask] = value
 
-    def grid(self):
-        xx = numpy.arange(*self.window[0,:])
-        yy = numpy.arange(*self.window[1,:])
-        zz = numpy.arange(*self.window[2,:])
-        return numpy.meshgrid(yy, xx, zz)
-    
+    def grid(self, samples=1, sparse=False):
+        xx = numpy.arange(self.window[0,0], 
+                          self.window[0,1], 
+                          1/samples)
+        yy = numpy.arange(self.window[1,0], 
+                          self.window[1,1], 
+                          1/samples)
+        zz = numpy.arange(self.window[2,0], 
+                          self.window[2,1], 
+                          1/samples)
+        return numpy.meshgrid(yy, xx, zz, sparse=sparse)
+
+    # --------------------- OUTPUT FUNCTIONS
     def printp(self, value, color=''):
+        # point print
         print(color + value + Canvas.Color.ENDC, end=' ')
+
+    def printd(self, value, color=''):
+        # debug print
+        print("[{0:04}]".format(value), end=' ')
         
     def endl(self):
+        #endline print
         print('\n', end='')
 
     def zSeparator(self, length):
@@ -85,17 +181,20 @@ class Canvas(object):
             print(self.separator, end=' ')
         self.endl()
     
-    def show(self):
+    def show(self, dbg=False):
         for z in range(0, self.data.shape[2]):
             for y in range(0, self.data.shape[0]):
                 for x in range(0, self.data.shape[1]):
-                    if (self.data.item(*(numpy.array([y, x, z]))) == 1):
+                    if dbg:
+                        self.printd(self.data.item(*(numpy.array([y, x, z]))))
+                    elif (self.data.item(*(numpy.array([y, x, z]))) == 1):
                         self.printp(self.fill, Canvas.Color.GREEN)
                     else:
                         self.printp(self.blank)
                 self.endl()
             self.zSeparator(self.data.shape[1])
-    
+            
+    # --------------------- Shape handling functions
     def addShape(self, shape):
         self.shapes.append(shape)
         shape.draw(self)
@@ -196,21 +295,36 @@ class Plane(Shape):
         return plane
 
 class Thorus(Shape):
-    
     def __init__(self, r_thorus, r_pipe, center):
         self.radius = r_thorus
         self.pipe_radius = r_pipe
         self.center = center
+        R = self.radius
+        r = self.pipe_radius
+        # coefficents of the thorus polynomial
+        # the polynomial is derived with basic arithmetic from
+        # (R - sqrt(x^2 + y^2))^2 + z^2 = r^2
+        # R = thorus radius
+        # r = pipe radius
+        self.c = numpy.zeros((5,5,5))
+        self.c[4,0,0] = 1 #x^4
+        self.c[0,4,0] = 1 #y^4
+        self.c[0,0,4] = 1 #z^4
+        self.c[2,0,0] = -2*(r^2 + R^2) #x^2
+        self.c[0,2,0] = -2*(r^2 + R^2) #y^2
+        self.c[0,0,2] = 2*(R^2 - r^2) #z^2
+        self.c[2,2,0] = 2 #x^2y^2 
+        self.c[2,0,2] = 2 #x^2z^2
+        self.c[0,2,2] = 2 #y^2z^2
+        self.c[0,0,0] = -2*(r*R)^2 + r^4 + R^4
         
     def draw(self, canvas):
-        gx, gy, gz = canvas.grid()
-        c = numpy.zeros((4,4,4))
-        c[1,0,0] = self.normal[0]
-        c[0,1,0] = self.normal[1]
-        c[0,0,1] = self.normal[2]
-        points = poly.polyval3d(gx, gy, gz, c)
-        plane = numpy.around(points) == 0
-        canvas.setgrid(plane)
+        gx, gy, gz = canvas.grid(samples=10, sparse=False)
+        start = time.time()
+        points = poly.polyval3d(gx, gy, gz, self.c) 
+        thorus = numpy.around(points) == 0
+        print("--- %s seconds ---" % (time.time() - start,))
+        canvas.setgrid(thorus, downsample=True)
         
     def fromArgs(args):
         radius = args['radius']
@@ -265,7 +379,7 @@ def main():
 
     # parse the arguments
     args = vars(parser.parse_args())
-    canvas = Canvas.fromArgs(args)
+    canvas = Canvas.fromArgs(args) 
     if ('func' in args):
         shape = args['func'](args)
         canvas.addShape(shape)
